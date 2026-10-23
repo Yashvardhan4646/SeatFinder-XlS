@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   AlertCircle,
   Calendar,
   CalendarDays,
@@ -28,6 +29,7 @@ import {
   MapPin,
   Maximize2,
   Printer,
+  RotateCcw,
   Search,
   Share2,
   ShieldAlert,
@@ -40,6 +42,12 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
+import confetti from "canvas-confetti";
+import { motion, AnimatePresence } from "framer-motion";
+import { Spotlight } from "@/components/ui/spotlight";
+import { CardSpotlight } from "@/components/ui/card-spotlight";
+import { HoverBorderGradient } from "@/components/ui/hover-border-gradient";
+import { CourseSelector, type CourseOption } from "@/components/CourseSelector";
 import {
   groupByStudent,
   normalize,
@@ -118,19 +126,46 @@ function Index() {
   const [examError, setExamError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [courseFilter, setCourseFilter] = useState<string>("ALL");
   const [shiftFilter, setShiftFilter] = useState<string>("ALL");
   const [showContributeModal, setShowContributeModal] = useState(false);
 
   const cache = useRef(new Map<string, ParsedWorkbook>());
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // URL parameter sync (?q=... and ?contribute=1)
+  // Extract unique available courses from the loaded workbook
+  const availableCourses = useMemo<CourseOption[]>(() => {
+    if (!parsed) return [];
+    const map = new Map<string, number>();
+    for (const e of parsed.entries) {
+      const p = normalize(e.program);
+      if (!p) continue;
+      map.set(p, (map.get(p) || 0) + 1);
+    }
+    return Array.from(map.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  }, [parsed]);
+
+  // Reset course filter if not available in newly selected exam
+  useEffect(() => {
+    if (courseFilter !== "ALL" && availableCourses.length > 0) {
+      const exists = availableCourses.some((c) => c.name === courseFilter);
+      if (!exists) setCourseFilter("ALL");
+    }
+  }, [availableCourses, courseFilter]);
+
+  // URL parameter sync (?q=... and ?course=... and ?contribute=1)
   useEffect(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const urlQ = params.get("q");
       if (urlQ) {
         setQuery(urlQ);
+      }
+      const urlCourse = params.get("course");
+      if (urlCourse) {
+        setCourseFilter(urlCourse);
       }
       if (params.get("contribute") === "1" || params.get("contribute") === "true") {
         setShowContributeModal(true);
@@ -146,9 +181,14 @@ function Index() {
       } else {
         url.searchParams.delete("q");
       }
+      if (courseFilter && courseFilter !== "ALL") {
+        url.searchParams.set("course", courseFilter);
+      } else {
+        url.searchParams.delete("course");
+      }
       window.history.replaceState(null, "", url.toString());
     }
-  }, [query]);
+  }, [query, courseFilter]);
 
   // Load exam metadata catalog
   useEffect(() => {
@@ -269,120 +309,171 @@ function Index() {
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  // Reset selected student on query change
-  useEffect(() => setSelectedKey(null), [query, examId]);
+  // Reset selected student on query, exam, course, or shift change
+  useEffect(() => setSelectedKey(null), [query, examId, courseFilter, shiftFilter]);
 
-  // Compute matched entries
+  // Compute matched entries narrowed down by course, query, and shift
   const results = useMemo(() => {
     if (!parsed) return [];
-    const matched = searchEntries(query, parsed.entries);
+
+    // 1. Course filter
+    const inCourse =
+      courseFilter === "ALL"
+        ? parsed.entries
+        : parsed.entries.filter((e) => normalize(e.program) === courseFilter);
+
+    // 2. Query search
+    let matched: SeatEntry[];
+    const q = query.trim();
+    if (q.length >= 2) {
+      matched = searchEntries(q, inCourse);
+    } else if (courseFilter !== "ALL") {
+      // When course is chosen and query is empty/short, display all students in that course
+      matched = inCourse;
+    } else {
+      matched = [];
+    }
+
+    // 3. Shift filter
     if (shiftFilter === "ALL") return matched;
     return matched.filter((e) => shiftNumber(e.shiftLabel) === shiftFilter);
-  }, [parsed, query, shiftFilter]);
+  }, [parsed, query, courseFilter, shiftFilter]);
 
   const groups = useMemo(() => groupByStudent(results), [results]);
 
   const activeExam = exams.find((e) => e.id === examId);
-  const active = query.trim().length >= 2;
+  const active = query.trim().length >= 2 || courseFilter !== "ALL";
   const activeGroup = selectedKey
     ? groups.find((g) => g.key === selectedKey)
     : undefined;
   const group = groups.length === 1 ? groups[0] : activeGroup;
   const showTable = active && groups.length > 1 && !activeGroup;
 
-  // Detect query type helper
+  // Detect query type helper with futuristic radar telemetry
   const queryTypeBadge = useMemo(() => {
     const q = query.trim();
-    if (!q) return null;
-    if (/^\d{6,}$/.test(q))
-      return { label: "Searching Roll Number", color: "bg-indigo-50 text-indigo-700 border-indigo-200" };
-    if (/^\d{2}[A-Za-z]{2,}/i.test(q))
-      return { label: "Searching Admission No", color: "bg-blue-50 text-blue-700 border-blue-200" };
-    return { label: "Searching Candidate Name", color: "bg-zinc-100 text-zinc-700 border-zinc-200" };
-  }, [query]);
+    if (q) {
+      if (/^\d{6,}$/.test(q))
+        return {
+          label: "RADAR LOCK: ROLL NUMBER",
+          sub: `${q.length} DIGITS · DIRECT DESK MATCH`,
+          color: "bg-indigo-50 text-indigo-700 border-indigo-200/90 shadow-[0_0_12px_rgba(99,102,241,0.15)]",
+          dotColor: "bg-indigo-500",
+        };
+      if (/^\d{2}[A-Za-z]{2,}/i.test(q))
+        return {
+          label: "SCANNER: ADMISSION ID",
+          sub: "STUDENT REGISTRATION ID",
+          color: "bg-cyan-50 text-cyan-800 border-cyan-200/90 shadow-[0_0_12px_rgba(6,182,212,0.15)]",
+          dotColor: "bg-cyan-500",
+        };
+      return {
+        label: "MATRIX: CANDIDATE NAME",
+        sub: "FUZZY ROSTER SEARCH",
+        color: "bg-purple-50 text-purple-700 border-purple-200/90 shadow-[0_0_12px_rgba(168,85,247,0.15)]",
+        dotColor: "bg-purple-500",
+      };
+    }
+    if (courseFilter !== "ALL") {
+      return {
+        label: `COURSE FILTER: ${courseFilter}`,
+        sub: "ENROLLED BATCH",
+        color: "bg-indigo-50 text-indigo-900 border-indigo-300 font-extrabold shadow-[0_0_12px_rgba(99,102,241,0.15)]",
+        dotColor: "bg-indigo-600",
+      };
+    }
+    return null;
+  }, [query, courseFilter]);
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] text-[#0F172A] selection:bg-indigo-600 selection:text-white">
-      {/* Top Navbar */}
-      <header className="sticky top-0 z-40 border-b border-[#E2E8F0] bg-white">
+    <div className="relative min-h-screen bg-[#F8F9FA] text-[#0F172A] selection:bg-indigo-600 selection:text-white overflow-x-hidden">
+      {/* Aceternity UI Spotlight Beam */}
+      <Spotlight
+        className="-top-40 left-0 md:left-60 md:-top-20"
+        fill="#6366F1"
+      />
+
+      {/* Aceternity UI Grid Background Pattern */}
+      <div className="pointer-events-none fixed inset-0 bg-grid-aceternity [mask-image:radial-gradient(ellipse_at_center,transparent_20%,black)] opacity-40 -z-10" />
+
+      {/* Modern Top Navbar */}
+      <header className="glass-header sticky top-0 z-40 transition-all">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
-          {/* Brand & Author */}
-          <div className="flex items-center gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-[#0F172A] text-white font-extrabold text-xs tracking-wider">
-              SF
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-base font-extrabold tracking-tight text-[#0F172A]">
-                  SeatingFinder
-                </span>
-                <span className="rounded-md border border-[#E2E8F0] bg-[#F1F5F9] px-2 py-0.5 text-[11px] font-mono font-bold text-[#334155]">
-                  by Yashvardhan
-                </span>
-                <span className="hidden md:inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-800">
-                  <span className="size-1.5 rounded-full bg-amber-600 animate-pulse" />
-                  Unofficial Student Portal
-                </span>
-              </div>
-              <p className="text-[11px] text-[#64748B] hidden sm:block">
-                Ultra-fast exam room & desk allocation finder
-              </p>
-            </div>
+          {/* Brand & Status */}
+          <div className="flex items-center gap-2.5">
+            <span className="font-display text-lg font-black tracking-tight text-slate-900">
+              SeatFinder<span className="text-indigo-600">.</span>
+            </span>
+            <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-emerald-200/80 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700">
+              <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Live Fall '26
+            </span>
           </div>
 
           {/* Right Header Controls */}
-          <div className="flex items-center gap-2.5">
-            {/* Want to contribute button for devs */}
-            <button
-              type="button"
-              id="contribute-header-btn"
-              onClick={() => setShowContributeModal(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 transition-colors cursor-pointer"
-            >
-              <GitPullRequest className="size-3.5 text-indigo-600" />
-              <span>Want to contribute?</span>
-              <span className="hidden sm:inline-block rounded bg-indigo-200/80 px-1 text-[9px] font-mono text-indigo-800 font-bold">
-                DEV
-              </span>
-            </button>
-
-            {/* Record Counter Pill */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Live Seat Records Counter */}
             {parsed && (
-              <div className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-1.5 text-xs font-bold text-[#334155]">
+              <div className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-50/80 px-3 py-1 text-xs font-semibold text-slate-700">
                 <span className="size-2 rounded-full bg-emerald-500" />
-                <span>{parsed.entries.length.toLocaleString()} Records</span>
+                <span>{parsed.entries.length.toLocaleString()} Seats</span>
               </div>
             )}
+
+            {/* Keyboard shortcut hint */}
+            <span className="hidden md:inline-flex items-center gap-1 text-[11px] text-slate-400 font-medium">
+              Press
+              <kbd className="rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600 font-bold">
+                /
+              </kbd>
+            </span>
+
+            {/* Aceternity UI HoverBorderGradient Contribute Button */}
+            <HoverBorderGradient
+              as="button"
+              id="contribute-header-btn"
+              onClick={() => setShowContributeModal(true)}
+              containerClassName="rounded-xl border-slate-200/90"
+              className="bg-white hover:bg-slate-50 text-slate-700 hover:text-indigo-600 px-3 py-1.5 text-xs font-semibold"
+            >
+              <GitPullRequest className="size-3.5 text-indigo-600" />
+              <span className="hidden sm:inline">Contribute</span>
+            </HoverBorderGradient>
+
+            {/* GitHub Link */}
+            <a
+              href="https://github.com/Yashvardhan4646/seatfinder-xls"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="GitHub Repository"
+              className="flex size-8 sm:size-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-slate-950 hover:border-slate-300 transition-colors shadow-xs"
+            >
+              <Github className="size-4" />
+            </a>
           </div>
         </div>
       </header>
 
       {/* Main Container */}
-      <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
-        {/* Hero Section */}
-        <div className="mb-8">
-          <div className="flex flex-wrap items-center gap-2 mb-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-0.5 text-xs font-bold text-indigo-700">
-              <Sparkles className="size-3 text-indigo-600" />
-              Mid-Term Seating Arrangements 2026–27
-            </span>
-            <span className="text-xs text-[#94A3B8]">·</span>
-            <span className="text-xs text-[#64748B] font-semibold">
-              Independent Student Utility
-            </span>
+      <main className="relative mx-auto max-w-6xl px-4 py-8 sm:px-6">
+        {/* Streamlined Hero Section */}
+        <div className="mb-6">
+          <div className="inline-flex items-center gap-1.5 rounded-full border border-indigo-100 bg-indigo-50/80 px-3 py-0.5 text-xs font-semibold text-indigo-700 mb-2">
+            <Sparkles className="size-3 text-indigo-600" />
+            <span>Mid-Term Exam Seating 2026–27</span>
           </div>
 
-          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-[#0F172A] leading-tight">
-            Find your exam desk in a split second.
+          <h1 className="font-display text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-slate-950 leading-tight">
+            Find your exam desk in seconds.
           </h1>
-          <p className="mt-2 text-sm sm:text-base text-[#475569] max-w-3xl leading-relaxed">
-            Built by <strong className="text-[#0F172A] font-bold">Yashvardhan</strong> so you never have to pinch-to-zoom through 100-page PDF spreadsheets right outside the hall. Type your roll number, admission number, or name below.
+          <p className="mt-1.5 text-sm sm:text-base text-slate-600 max-w-2xl">
+            Instant room and desk allocations. Search by Roll Number, Name, or filter by Course.
           </p>
 
           {/* Quick Demo Lookups */}
-          <div className="mt-5 flex flex-wrap items-center gap-2">
-            <span className="text-xs font-bold uppercase tracking-wider text-[#64748B] mr-1">
-              Quick demo:
+          <div className="mt-4 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-[11px] font-mono font-bold text-slate-400 mr-1 flex items-center gap-1">
+              <Zap className="size-3 text-cyan-500" /> QUICK_TARGET:
             </span>
             {QUICK_LOOKUPS.map((item) => (
               <button
@@ -391,67 +482,129 @@ function Index() {
                 onClick={() => {
                   setQuery(item.query);
                   setSelectedKey(null);
+                  setCourseFilter("ALL");
                   searchRef.current?.focus();
                 }}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white px-3 py-1.5 text-xs font-bold text-[#1E293B] hover:border-indigo-600 hover:bg-indigo-50 hover:text-indigo-700 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/90 bg-white/90 backdrop-blur-xs px-3 py-1 text-xs font-medium text-slate-700 hover:border-cyan-400 hover:text-cyan-700 hover:shadow-[0_0_15px_rgba(6,182,212,0.25)] transition-all cursor-pointer shadow-2xs"
               >
-                <span>{item.label}</span>
-                <span className="rounded bg-[#F1F5F9] px-1.5 py-0.5 text-[10px] font-mono text-[#64748B]">
-                  {item.detail}
-                </span>
+                <span className="font-semibold text-slate-900">{item.label}</span>
+                <span className="text-[10px] text-slate-400 font-mono">({item.type})</span>
               </button>
             ))}
           </div>
         </div>
 
-        {/* Command Search Console */}
-        <div className="rounded-2xl border border-[#CBD5E1] bg-white p-4 sm:p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            {/* Search Input Box */}
-            <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#94A3B8]" />
-              <input
-                id="student-search-input"
-                ref={searchRef}
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setQuery("");
-                }}
-                placeholder="Type Roll No (e.g. 24131040494), Admission No, or Name…"
-                autoComplete="off"
-                spellCheck={false}
-                className="h-12 w-full rounded-xl border border-[#CBD5E1] bg-[#F8FAFC] pl-10 pr-24 font-mono text-sm font-bold text-[#0F172A] outline-none placeholder:font-sans placeholder:font-normal placeholder:text-[#94A3B8] focus:border-indigo-600 focus:bg-white focus:ring-1 focus:ring-indigo-600"
-              />
+        {/* Aceternity UI CardSpotlight Command Console */}
+        <CardSpotlight
+          radius={450}
+          color="rgba(99, 102, 241, 0.09)"
+          className="rounded-3xl border border-slate-200/90 bg-white/95 backdrop-blur-xl p-4 sm:p-6 shadow-xl shadow-indigo-500/5 hover:border-indigo-300/80 transition-colors"
+        >
+          {/* Futuristic HUD Telemetry Bar */}
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 text-[10px] font-mono uppercase tracking-wider text-slate-400">
+            <div className="flex items-center gap-2">
+              <span className="relative flex size-2">
+                <span className="radar-ping absolute inline-flex size-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+              </span>
+              <span className="font-bold text-slate-800 tracking-tight flex items-center gap-1.5">
+                <Terminal className="size-3 text-indigo-600" />
+                MATRIX QUERY ENGINE // v2.6
+              </span>
+              <span className="text-slate-300">|</span>
+              <span className="text-indigo-600 font-semibold">
+                SYSTEM: READY · {parsed ? `${parsed.entries.length.toLocaleString()} SEATS INDEXED` : "INITIALIZING"}
+              </span>
+            </div>
 
-              <div className="absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
-                {query && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQuery("");
-                      searchRef.current?.focus();
-                    }}
-                    className="rounded-md bg-[#E2E8F0] p-1 text-[#475569] hover:bg-[#CBD5E1] hover:text-[#0F172A] cursor-pointer"
-                    title="Clear query (Esc)"
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                )}
-                <kbd className="hidden sm:inline-block rounded border border-[#CBD5E1] bg-[#E2E8F0] px-1.5 py-0.5 text-[10px] font-mono font-bold text-[#475569]">
-                  /
-                </kbd>
+            <div className="hidden sm:flex items-center gap-3 text-slate-400">
+              <span className="flex items-center gap-1 text-slate-500">
+                <Activity className="size-3 text-cyan-600 animate-pulse" />
+                <span>IN-MEMORY RADAR</span>
+              </span>
+              <span className="text-slate-300">·</span>
+              <span className="font-semibold text-emerald-600">ZERO LATENCY</span>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            {/* Futuristic Glowing Input HUD */}
+            <div className="futuristic-glow-frame p-[1.5px] rounded-2xl flex-1 group/input shadow-sm">
+              <div className="futuristic-input-hud relative flex h-13 w-full items-center rounded-[14.5px] bg-white pl-3.5 pr-3">
+                {/* Futuristic Laser Reticle Icon */}
+                <div className="mr-3 flex size-8 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-cyan-400 shadow-xs shadow-cyan-500/20 group-focus-within/input:bg-indigo-600 group-focus-within/input:text-white group-focus-within/input:shadow-[0_0_20px_rgba(99,102,241,0.6)] transition-all">
+                  <Search className="size-4 group-focus-within/input:scale-110 transition-transform" />
+                </div>
+
+                {/* Cyber Prompt Cursor */}
+                <span className="hidden sm:inline font-mono text-sm font-bold text-indigo-600 mr-2 select-none group-focus-within/input:animate-pulse">
+                  ❯
+                </span>
+
+                <input
+                  id="student-search-input"
+                  ref={searchRef}
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setQuery("");
+                  }}
+                  placeholder={
+                    courseFilter !== "ALL"
+                      ? `[ ${courseFilter} ] Search Roll No, Admission ID, or Name…`
+                      : "ENTER QUERY [ ROLL NO · ADMISSION ID · CANDIDATE NAME ]…"
+                  }
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="h-full w-full bg-transparent font-mono text-sm sm:text-base font-bold text-slate-900 outline-none placeholder:font-sans placeholder:text-xs sm:placeholder:text-sm placeholder:font-medium placeholder:text-slate-400"
+                />
+
+                {/* Right Action Icons & Futuristic Keycaps */}
+                <div className="flex shrink-0 items-center gap-2">
+                  {query && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuery("");
+                        searchRef.current?.focus();
+                      }}
+                      className="rounded-lg bg-slate-100 hover:bg-slate-200 p-1.5 text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
+                      title="Clear query (Esc)"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  )}
+
+                  {/* 3D Cyber HUD Keycap */}
+                  <div className="hidden sm:flex items-center gap-1 rounded-lg border border-slate-200/90 bg-slate-50 px-2 py-1 text-[11px] font-mono font-bold text-slate-600 shadow-2xs">
+                    <kbd className="text-[10px] text-slate-400">⌘</kbd>
+                    <span>K</span>
+                    <span className="text-slate-300">/</span>
+                    <span>/</span>
+                  </div>
+                </div>
               </div>
             </div>
 
+            {/* Course Selector Dropdown */}
+            <CourseSelector
+              courses={availableCourses}
+              selectedCourse={courseFilter}
+              onSelectCourse={(course) => {
+                setCourseFilter(course);
+                setSelectedKey(null);
+              }}
+              disabled={!parsed || availableCourses.length === 0}
+            />
+
             {/* Exam Catalog Selector */}
-            <div className="w-full sm:w-52">
+            <div className="w-full sm:w-48 shrink-0">
               <select
                 id="exam-catalog-select"
                 value={examId}
                 onChange={(e) => setExamId(e.target.value)}
-                className="h-12 w-full rounded-xl border border-[#CBD5E1] bg-[#F8FAFC] px-3 text-xs font-bold text-[#1E293B] outline-none focus:border-indigo-600 focus:bg-white focus:ring-1 focus:ring-indigo-600 cursor-pointer"
+                className="h-13 w-full rounded-2xl border border-slate-200 bg-slate-50/80 px-3 text-xs font-mono font-bold text-slate-800 outline-none hover:border-slate-300 focus:border-indigo-600 focus:bg-white focus:ring-2 focus:ring-indigo-500/20 cursor-pointer transition-all shadow-xs"
               >
                 {exams.map((e) => (
                   <option key={e.id} value={e.id}>
@@ -462,13 +615,14 @@ function Index() {
             </div>
 
             {/* Upload Custom Excel Button */}
-            <div>
+            <div className="shrink-0">
               <label
-                className="btn-velvet-secondary inline-flex h-12 cursor-pointer items-center justify-center gap-1.5 rounded-xl px-4 text-xs font-bold whitespace-nowrap"
+                className="inline-flex h-13 cursor-pointer items-center justify-center gap-1.5 rounded-2xl border border-slate-200 bg-white px-4 text-xs font-mono font-bold text-slate-700 hover:border-indigo-400 hover:text-indigo-600 hover:shadow-xs transition-all whitespace-nowrap"
                 title="Upload another spreadsheet (.xls / .xlsx)"
               >
-                <Upload className="size-3.5 text-[#64748B]" />
-                <span>Upload Custom Excel</span>
+                <Upload className="size-3.5 text-slate-500" />
+                <span className="hidden lg:inline">Upload Custom Excel</span>
+                <span className="lg:hidden">Upload</span>
                 <input
                   type="file"
                   accept=".xls,.xlsx"
@@ -480,24 +634,24 @@ function Index() {
           </div>
 
           {/* Active Query Detection Chip & Shift Filter Pills */}
-          <div className="mt-4 pt-4 border-t border-[#E2E8F0] flex flex-wrap items-center justify-between gap-3">
+          <div className="mt-5 pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
             {/* Shift Tabs */}
             {parsed && parsed.shifts.length > 0 ? (
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-xs font-bold text-[#64748B] uppercase tracking-wider mr-1 flex items-center gap-1">
+                <span className="text-xs font-mono font-bold text-slate-400 uppercase tracking-wider mr-1 flex items-center gap-1">
                   <Layers className="size-3.5 text-indigo-600" />
-                  Shift:
+                  SHIFT:
                 </span>
                 <button
                   type="button"
                   onClick={() => setShiftFilter("ALL")}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                  className={`rounded-xl px-3 py-1.5 text-xs font-mono font-bold transition-all cursor-pointer ${
                     shiftFilter === "ALL"
-                      ? "bg-[#0F172A] text-white"
-                      : "bg-[#F1F5F9] text-[#334155] border border-[#E2E8F0] hover:bg-[#E2E8F0]"
+                      ? "bg-slate-900 text-white shadow-xs"
+                      : "bg-slate-100/80 text-slate-600 border border-slate-200/70 hover:bg-slate-200"
                   }`}
                 >
-                  All Shifts ({parsed.entries.length.toLocaleString()})
+                  ALL SHIFTS ({parsed.entries.length.toLocaleString()})
                 </button>
                 {parsed.shifts.map((s) => {
                   const label = shiftNumber(s.label);
@@ -510,14 +664,15 @@ function Index() {
                       key={s.sheet}
                       type="button"
                       onClick={() => setShiftFilter(label)}
-                      className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                      className={`rounded-xl px-3 py-1.5 text-xs font-mono font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                         isSelected
-                          ? "bg-indigo-600 text-white"
-                          : "bg-[#F1F5F9] text-[#334155] border border-[#E2E8F0] hover:bg-[#E2E8F0]"
+                          ? "bg-indigo-600 text-white shadow-sm shadow-indigo-500/25"
+                          : "bg-slate-100/80 text-slate-600 border border-slate-200/70 hover:bg-slate-200"
                       }`}
                     >
+                      <span className={`size-1.5 rounded-full ${isSelected ? "bg-emerald-300 animate-pulse" : "bg-slate-400"}`} />
                       <span>{label}</span>
-                      <span className="ml-1 text-[10px] opacity-75">
+                      <span className="text-[10px] opacity-75">
                         ({count.toLocaleString()})
                       </span>
                     </button>
@@ -526,16 +681,46 @@ function Index() {
               </div>
             ) : null}
 
-            {/* Search Type Detector */}
-            {queryTypeBadge && (
-              <div
-                className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-bold ${queryTypeBadge.color}`}
-              >
-                <span>{queryTypeBadge.label}</span>
-              </div>
-            )}
+            {/* Active Filters & Search Type Detector */}
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Active Course Pill */}
+              {courseFilter !== "ALL" && (
+                <div className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-300 bg-indigo-50/80 px-2.5 py-1 text-xs font-mono font-bold text-indigo-800 shadow-2xs">
+                  <GraduationCap className="size-3.5 text-indigo-600" />
+                  <span className="truncate max-w-[200px] sm:max-w-xs">
+                    {courseFilter}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCourseFilter("ALL")}
+                    className="ml-0.5 rounded p-0.5 hover:bg-indigo-200 text-indigo-700 cursor-pointer"
+                    title="Clear course filter"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              )}
+
+              {/* Futuristic Radar Query Type Detector */}
+              {queryTypeBadge && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className={`inline-flex items-center gap-2 rounded-xl border px-3 py-1 text-xs font-mono font-bold tracking-tight ${queryTypeBadge.color}`}
+                >
+                  <span className={`size-2 rounded-full ${queryTypeBadge.dotColor} animate-pulse`} />
+                  <span>{queryTypeBadge.label}</span>
+                  {queryTypeBadge.sub && (
+                    <>
+                      <span className="opacity-30">|</span>
+                      <span className="text-[10px] opacity-75">{queryTypeBadge.sub}</span>
+                    </>
+                  )}
+                </motion.div>
+              )}
+            </div>
           </div>
-        </div>
+        </CardSpotlight>
 
         {/* Results / Seating Pass Presentation */}
         <section className="mt-8" aria-live="polite">
@@ -571,27 +756,61 @@ function Index() {
               <p className="mt-2 text-sm font-semibold">Loading workbook data…</p>
             </div>
           ) : !active ? (
-            /* Empty Search State */
-            <div className="rounded-2xl border border-[#CBD5E1] bg-white p-12 sm:p-16 text-center">
-              <div className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
-                <Search className="size-7" />
+            /* Aceternity Style Empty State & Bento Grid */
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-slate-200/90 bg-white/90 backdrop-blur-md p-8 sm:p-10 text-center shadow-xs">
+                <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100">
+                  <Search className="size-5" />
+                </div>
+                <h2 className="font-display mt-3 text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight">
+                  Ready to find your seat
+                </h2>
+                <p className="mt-1 text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
+                  Type your Roll Number, Admission Number, or choose your course from the dropdown above to view your exam hall and desk assignment.
+                </p>
               </div>
-              <h2 className="mt-4 text-lg font-black text-[#0F172A]">
-                Enter your details to reveal your exam desk
-              </h2>
-              <p className="mt-1.5 text-xs text-[#64748B] max-w-md mx-auto leading-relaxed">
-                Type your 11-digit Roll Number, Admission Number, or Name into the search box above. Or click any of the sample quick pills.
-              </p>
-              <div className="mt-6 flex flex-wrap justify-center gap-2 text-[11px] text-[#475569]">
-                <span className="rounded-md border border-[#E2E8F0] bg-[#F8FAFC] px-2.5 py-1">
-                  ⚡ 30,311 Total Students
-                </span>
-                <span className="rounded-md border border-[#E2E8F0] bg-[#F8FAFC] px-2.5 py-1">
-                  🏫 Blocks A, B, C & Audi
-                </span>
-                <span className="rounded-md border border-[#E2E8F0] bg-[#F8FAFC] px-2.5 py-1">
-                  🕒 4 Exam Shifts
-                </span>
+
+              {/* Bento Stat Highlights */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="rounded-xl border border-slate-200/80 bg-white/80 backdrop-blur-xs p-4 hover:border-indigo-300 transition-all shadow-2xs group">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 group-hover:text-indigo-600 transition-colors">
+                    Candidates Indexed
+                  </div>
+                  <div className="mt-1 font-display text-2xl font-black text-slate-900">
+                    {parsed.entries.length.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-medium">Verified exam records</div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200/80 bg-white/80 backdrop-blur-xs p-4 hover:border-indigo-300 transition-all shadow-2xs group">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 group-hover:text-indigo-600 transition-colors">
+                    Courses Filterable
+                  </div>
+                  <div className="mt-1 font-display text-2xl font-black text-indigo-600">
+                    {availableCourses.length}+
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-medium">B.Tech, BCA, MBA & more</div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200/80 bg-white/80 backdrop-blur-xs p-4 hover:border-indigo-300 transition-all shadow-2xs group">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 group-hover:text-indigo-600 transition-colors">
+                    Campus Blocks
+                  </div>
+                  <div className="mt-1 font-display text-2xl font-black text-slate-900">
+                    A, B, C & Audi
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-medium">40+ examination rooms</div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200/80 bg-white/80 backdrop-blur-xs p-4 hover:border-indigo-300 transition-all shadow-2xs group">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 group-hover:text-emerald-600 transition-colors">
+                    Latency
+                  </div>
+                  <div className="mt-1 font-display text-2xl font-black text-emerald-600 flex items-center gap-1">
+                    <span>&lt; 5ms</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-medium">Client-side instant lookup</div>
+                </div>
               </div>
             </div>
           ) : groups.length === 0 ? (
@@ -599,11 +818,27 @@ function Index() {
             <div className="rounded-2xl border border-amber-300 bg-amber-50 p-6 text-amber-950">
               <div className="flex items-center gap-2 font-bold text-sm text-amber-900">
                 <AlertCircle className="size-5 text-amber-700" />
-                <span>No candidate found for “{query.trim()}”</span>
+                <span>
+                  {courseFilter !== "ALL"
+                    ? `No candidate found for “${query.trim()}” in ${courseFilter}`
+                    : `No candidate found for “${query.trim()}”`}
+                </span>
               </div>
               <p className="mt-1.5 text-xs text-amber-800 leading-relaxed">
                 Check for typing errors, try searching by just the Roll Number or partial Name, or ensure the shift filter is set to <strong>All Shifts</strong>.
               </p>
+              {courseFilter !== "ALL" && (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() => setCourseFilter("ALL")}
+                    className="btn-velvet-secondary inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold cursor-pointer"
+                  >
+                    <RotateCcw className="size-3.5 text-indigo-600" />
+                    <span>Clear course filter & search across all courses</span>
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             /* Result Found: Ticket Pass & Optional Candidate Table */
@@ -613,6 +848,8 @@ function Index() {
                   key={group.key}
                   group={group}
                   dateLabel={activeExam?.label ?? ""}
+                  hasMultipleCandidates={groups.length > 1}
+                  onBack={() => setSelectedKey(null)}
                 />
               )}
 
@@ -620,6 +857,7 @@ function Index() {
                 <CandidateTable
                   groups={groups}
                   query={query.trim()}
+                  courseFilter={courseFilter}
                   onPick={setSelectedKey}
                 />
               )}
@@ -627,52 +865,22 @@ function Index() {
           )}
         </section>
 
-        {/* Developer Contribution Banner */}
-        <section className="mt-12 rounded-2xl border border-indigo-200 bg-indigo-50/60 p-6 sm:p-8">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="inline-flex size-7 items-center justify-center rounded-lg bg-indigo-600 text-white">
-                  <Code2 className="size-4" />
-                </span>
-                <h3 className="text-base font-extrabold text-[#0F172A]">
-                  Are you a developer? Help improve SeatingFinder!
-                </h3>
-              </div>
-              <p className="mt-1.5 text-xs text-[#475569] max-w-2xl leading-relaxed">
-                This project was created by <strong className="text-[#0F172A]">Yashvardhan</strong> to help fellow university students. We are adding screenshot OCR, hall directions, and offline PWA support. Everyone is welcome to contribute!
-              </p>
-            </div>
-
-            <button
-              type="button"
-              id="contribute-banner-btn"
-              onClick={() => setShowContributeModal(true)}
-              className="btn-velvet-indigo inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold whitespace-nowrap cursor-pointer shrink-0"
-            >
-              <GitPullRequest className="size-4" />
-              <span>Want to contribute?</span>
-            </button>
-          </div>
-        </section>
       </main>
 
-      {/* Footer */}
-      <footer className="mt-16 border-t border-[#E2E8F0] bg-white py-8">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-[#64748B]">
+      {/* Modern Minimal Footer */}
+      <footer className="mt-20 border-t border-slate-200/80 bg-white/50 backdrop-blur-xs py-8">
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
           <div className="flex items-center gap-2">
-            <span className="font-extrabold text-[#0F172A]">SeatingFinder</span>
+            <span className="font-display font-bold text-slate-900">SeatFinder.</span>
             <span>·</span>
-            <span>
-              Crafted by <strong className="text-[#0F172A] font-bold">Yashvardhan</strong> for students
-            </span>
+            <span>Crafted by Yashvardhan for university students</span>
           </div>
 
           <div className="flex items-center gap-4">
             <button
               type="button"
               onClick={() => setShowContributeModal(true)}
-              className="font-bold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer flex items-center gap-1.5"
+              className="font-medium text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer flex items-center gap-1.5"
             >
               <GitPullRequest className="size-3.5" />
               <span>Want to contribute?</span>
@@ -682,13 +890,11 @@ function Index() {
               href="https://github.com/Yashvardhan4646/seatfinder-xls"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-[#0F172A] flex items-center gap-1 transition-colors"
+              className="hover:text-slate-900 flex items-center gap-1 transition-colors"
             >
               <Github className="size-3.5" />
               <span>GitHub</span>
             </a>
-            <span>·</span>
-            <span className="text-[#94A3B8]">Unofficial Portal</span>
           </div>
         </div>
       </footer>
@@ -708,14 +914,33 @@ function Index() {
 function SeatingCard({
   group,
   dateLabel,
+  hasMultipleCandidates,
+  onBack,
 }: {
   group: StudentGroup;
   dateLabel: string;
+  hasMultipleCandidates?: boolean;
+  onBack?: () => void;
 }) {
   const [idx, setIdx] = useState(0);
   const [copied, setCopied] = useState(false);
   const entry = group.entries[Math.min(idx, group.entries.length - 1)]!;
   const multi = group.entries.length > 1;
+
+  // Trigger celebratory confetti on pass discovery
+  useEffect(() => {
+    try {
+      confetti({
+        particleCount: 40,
+        spread: 60,
+        origin: { y: 0.65 },
+        colors: ["#6366F1", "#8B5CF6", "#10B981", "#3B82F6"],
+        disableForReducedMotion: true,
+      });
+    } catch {
+      // safe fallback
+    }
+  }, [entry.roomNo, entry.seatNo]);
 
   const handleCopy = () => {
     const text = `EXAM SEATING PASS (By Yashvardhan)\n---------------------------------\nDate: ${dateLabel}\nCandidate: ${entry.name}\nRoll No: ${entry.enrollmentNo}\nAdmission No: ${entry.admissionNo}\nProgram: ${entry.program}\nRoom No: ${entry.roomNo}\nDesk / Seat No: ${entry.seatNo}\nShift: ${shiftNumber(entry.shiftLabel)} (${entry.shiftTiming})\nSubject Code: ${entry.subCode}\nSubject Name: ${entry.subjectName || "—"}`;
@@ -742,21 +967,38 @@ function SeatingCard({
   };
 
   return (
-    <div className="seating-pass-card rounded-2xl border-2 border-[#0F172A] bg-white overflow-hidden relative">
-      {/* Top Pass Ribbon */}
+    <motion.div
+      initial={{ opacity: 0, y: 16, scale: 0.99 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.35, ease: "easeOut" }}
+    >
+      <CardSpotlight
+        radius={420}
+        color="rgba(79, 70, 229, 0.08)"
+        className="seating-pass-card rounded-2xl border-2 border-[#0F172A] bg-white overflow-hidden relative p-0 shadow-lg shadow-indigo-500/5"
+      >
+        {/* Top Pass Ribbon */}
       <div className="border-b-2 border-[#0F172A] bg-[#0F172A] px-5 py-3 text-white flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
-          <span className="flex size-2 rounded-full bg-emerald-400" />
-          <span className="text-xs font-black uppercase tracking-wider text-white">
+          <span className="flex size-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="font-display text-xs font-bold uppercase tracking-wider text-white">
             Official Candidate Seating Pass
-          </span>
-          <span className="rounded bg-indigo-600 px-2 py-0.5 text-[10px] font-bold text-white">
-            by Yashvardhan
           </span>
         </div>
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
+          {hasMultipleCandidates && onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              className="btn-velvet-secondary inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold cursor-pointer"
+              title="Return to matching candidate list"
+            >
+              <span>← Back to list</span>
+            </button>
+          )}
+
           <div className="inline-flex items-center gap-1.5 rounded-lg bg-[#1E293B] px-2.5 py-1 text-xs font-semibold text-[#E2E8F0]">
             <CalendarDays className="size-3.5 text-indigo-400" />
             <span>{dateLabel}</span>
@@ -978,7 +1220,8 @@ function SeatingCard({
           </div>
         )}
       </div>
-    </div>
+      </CardSpotlight>
+    </motion.div>
   );
 }
 
@@ -1031,10 +1274,12 @@ function PassField({
 function CandidateTable({
   groups,
   query,
+  courseFilter,
   onPick,
 }: {
   groups: StudentGroup[];
   query: string;
+  courseFilter?: string;
   onPick: (key: string) => void;
 }) {
   const MAX_DISPLAY = 80;
@@ -1049,14 +1294,28 @@ function CandidateTable({
   };
 
   return (
-    <div className="rounded-2xl border border-[#CBD5E1] bg-white overflow-hidden">
+    <motion.div
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-xs"
+    >
       <div className="border-b border-[#E2E8F0] bg-[#F8FAFC] px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-xs font-black uppercase tracking-wider text-[#0F172A]">
-            Matching Candidates ({groups.length.toLocaleString()})
-          </h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-[#0F172A]">
+              Matching Candidates ({groups.length.toLocaleString()})
+            </h3>
+            {courseFilter && courseFilter !== "ALL" && (
+              <span className="rounded bg-indigo-50 border border-indigo-200 px-2 py-0.5 text-[10px] font-bold text-indigo-700">
+                {courseFilter}
+              </span>
+            )}
+          </div>
           <p className="text-xs text-[#64748B]">
-            Multiple students match your search. Click any row to reveal the full seating pass.
+            {query
+              ? "Multiple students match your search. Click any row to reveal the full seating pass."
+              : `Displaying students enrolled in ${courseFilter}. Click any row to reveal their pass.`}
           </p>
         </div>
         <span className="text-xs font-bold text-indigo-600">
@@ -1140,15 +1399,19 @@ function CandidateTable({
         <span>
           {groups.length > MAX_DISPLAY
             ? `Showing first ${MAX_DISPLAY} of ${groups.length.toLocaleString()} matches. Type more characters to narrow down.`
+            : query
+            ? `${groups.length.toLocaleString()} candidate${
+                groups.length === 1 ? "" : "s"
+              } matching “${query}”.`
             : `${groups.length.toLocaleString()} candidate${
                 groups.length === 1 ? "" : "s"
-              } matching “${query}”.`}
+              } in ${courseFilter}.`}
         </span>
         <span className="font-bold text-indigo-600">
           Click any candidate to open ticket
         </span>
       </div>
-    </div>
+    </motion.div>
   );
 }
 

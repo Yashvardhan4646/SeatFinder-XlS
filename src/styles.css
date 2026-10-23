@@ -135,8 +135,6 @@
 @layer base {
   *, ::before, ::after {
     border-color: #E2E8F0;
-    box-shadow: none !important;
-    text-shadow: none !important;
   }
 
   html {
@@ -152,10 +150,100 @@
     letter-spacing: -0.011em;
   }
 
+  h1, h2, h3, h4, .font-display {
+    font-family: "Outfit", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+    letter-spacing: -0.022em;
+  }
+
   ::selection {
     background-color: #4338CA;
     color: #FFFFFF;
   }
+}
+
+/* Modern Glass & Elevation Utilities */
+.glass-header {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.85);
+}
+
+.glass-card {
+  background: #FFFFFF;
+  border: 1px solid #CBD5E1;
+  box-shadow: 0 10px 30px -10px rgba(15, 23, 42, 0.06);
+}
+
+.glow-pill {
+  box-shadow: 0 0 12px -2px rgba(79, 70, 229, 0.25);
+}
+
+/* Aceternity UI Spotlight Animation */
+@keyframes spotlight {
+  0% {
+    opacity: 0;
+    transform: translate(-72%, -62%) scale(0.5);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -40%) scale(1);
+  }
+}
+
+.animate-spotlight {
+  animation: spotlight 2s ease 0.5s 1 forwards;
+}
+
+/* Aceternity UI Background Patterns */
+.bg-grid-aceternity {
+  background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, rgba(226, 232, 240, 0.7) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(226, 232, 240, 0.7) 1px, transparent 1px);
+}
+
+.bg-dot-aceternity {
+  background-size: 24px 24px;
+  background-image: radial-gradient(rgba(148, 163, 184, 0.35) 1.2px, transparent 1.2px);
+}
+
+/* Futuristic Cyber Search Utilities */
+@keyframes cyber-glow-sweep {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes pulse-radar {
+  0% { transform: scale(0.95); opacity: 0.8; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+  70% { transform: scale(1.1); opacity: 1; box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { transform: scale(0.95); opacity: 0.8; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.radar-ping {
+  animation: pulse-radar 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.futuristic-glow-frame {
+  position: relative;
+  background: linear-gradient(90deg, #6366F1, #06B6D4, #8B5CF6, #EC4899, #6366F1);
+  background-size: 300% 300%;
+  animation: cyber-glow-sweep 8s ease infinite;
+}
+
+.futuristic-input-hud {
+  box-shadow: 
+    inset 0 1px 2px rgba(15, 23, 42, 0.04),
+    0 4px 20px -2px rgba(15, 23, 42, 0.05);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.futuristic-input-hud:focus-within {
+  box-shadow: 
+    0 0 0 2px #6366F1,
+    0 0 35px -5px rgba(99, 102, 241, 0.35),
+    0 0 50px -10px rgba(6, 182, 212, 0.25);
 }
 
 /* Velvet Button Utilities (Matte, tactile, smooth, zero shadows, no gradients) */
