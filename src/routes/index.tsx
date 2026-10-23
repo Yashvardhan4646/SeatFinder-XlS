@@ -679,7 +679,7 @@ function Index() {
             </button>
             <span>·</span>
             <a
-              href="https://github.com/Yashvardhan4646/screenshot-match"
+              href="https://github.com/Yashvardhan4646/seatfinder-xls"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-[#0F172A] flex items-center gap-1 transition-colors"
@@ -1157,7 +1157,7 @@ function CandidateTable({
  */
 function ContributeModal({ onClose }: { onClose: () => void }) {
   const [copiedClone, setCopiedClone] = useState(false);
-  const repoUrl = "https://github.com/Yashvardhan4646/screenshot-match";
+  const repoUrl = "https://github.com/Yashvardhan4646/seatfinder-xls";
   const cloneCmd = `git clone ${repoUrl}.git`;
 
   const copyClone = () => {

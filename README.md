@@ -44,8 +44,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/Yashvardhan4646/screenshot-match.git
-cd screenshot-match
+git clone https://github.com/Yashvardhan4646/seatfinder-xls.git
+cd seatfinder-xls
 
 # Install dependencies
 bun install
@@ -81,7 +81,7 @@ Contributions and feature requests from fellow developers are always welcome!
 - **🗺️ Campus Navigator:** Interactive block and floor maps for exam halls.
 - **📱 Offline PWA:** Caching passes for offline use when network is congested.
 
-Submit a pull request or open an issue on [GitHub](https://github.com/Yashvardhan4646/screenshot-match).
+Submit a pull request or open an issue on [GitHub](https://github.com/Yashvardhan4646/seatfinder-xls).
 
 ---
 
